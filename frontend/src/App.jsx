@@ -693,7 +693,6 @@ function Dashboard({ setActivePage }) {
             players="5 players"
           />
         </div>
-        
       </section>
 
       <footer className="dashboard-footer">
@@ -747,7 +746,6 @@ function TeamCard({ name, subtitle, tag, code, color, players }) {
   );
 }
 
-
 function Teams({ setActivePage }) {
   const [teams, setTeams] = useState([]);
   const [search, setSearch] = useState("");
@@ -800,6 +798,14 @@ function Teams({ setActivePage }) {
       (team.game_title || "").toLowerCase().includes(searchText)
     );
   });
+
+  // Calculate summary statistics
+  const totalTeams = teams.length;
+  const activeTeams = teams.filter((team) => team.status === "active").length;
+  const totalMembers = teams.reduce(
+    (sum, team) => sum + (team.member_count || 0),
+    0,
+  );
 
   async function handleCreateTeam(event) {
     event.preventDefault();
@@ -867,8 +873,43 @@ function Teams({ setActivePage }) {
         </div>
       )}
 
+      {/* Summary Cards */}
+      {!loading && !error && teams.length > 0 && (
+        <div className="teams-summary">
+          <div className="teams-summary-card">
+            <div className="teams-summary-icon">
+              <Shield size={24} />
+            </div>
+            <div>
+              <p>Total Teams</p>
+              <h3>{totalTeams}</h3>
+            </div>
+          </div>
+
+          <div className="teams-summary-card">
+            <div className="teams-summary-icon active">
+              <CircleCheck size={24} />
+            </div>
+            <div>
+              <p>Active Teams</p>
+              <h3>{activeTeams}</h3>
+            </div>
+          </div>
+
+          <div className="teams-summary-card">
+            <div className="teams-summary-icon">
+              <Users size={24} />
+            </div>
+            <div>
+              <p>Total Members</p>
+              <h3>{totalMembers}</h3>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showForm && (
-        <section className="panel" style={{ padding: 24 }}>
+        <section className="panel team-form-panel">
           <div className="teams-toolbar">
             <div>
               <h2>Create a team</h2>
@@ -942,7 +983,7 @@ function Teams({ setActivePage }) {
         </section>
       )}
 
-      <section className="panel" style={{ padding: 20 }}>
+      <section className="panel teams-list-panel">
         <div className="teams-toolbar">
           <div>
             <h2>Your teams</h2>
@@ -961,12 +1002,15 @@ function Teams({ setActivePage }) {
         </div>
 
         {loading ? (
-          <div className="teams-empty-state">
+          <div className="teams-loading-state">
+            <div className="loading-spinner"></div>
             <p>Loading teams...</p>
           </div>
         ) : filteredTeams.length === 0 ? (
           <div className="teams-empty-state">
-            <Users size={32} />
+            <div className="empty-state-icon">
+              <Users size={48} />
+            </div>
             <h3>{search ? "No matching teams" : "No teams yet"}</h3>
             <p>
               {search
@@ -979,7 +1023,7 @@ function Teams({ setActivePage }) {
                 className="primary-button"
                 onClick={() => setShowForm(true)}
               >
-                Add your first team
+                <Plus size={20} /> Add your first team
               </button>
             )}
           </div>
@@ -989,7 +1033,33 @@ function Teams({ setActivePage }) {
               <article className="teams-data-card" key={team.id}>
                 <div className="teams-data-card-header">
                   <div className="teams-game-avatar">
-                    {(team.game_title || "G").charAt(0).toUpperCase()}
+                    {(() => {
+                      const game = (team.game_title || "").toLowerCase();
+
+                      let logo = null;
+
+                      if (game.includes("valorant")) {
+                        logo = "/game-logos/valorant.png";
+                      } else if (
+                        game.includes("mobile legends") ||
+                        game.includes("mlbb")
+                      ) {
+                        logo = "/game-logos/mobile-legends.png";
+                      }
+
+                      return logo ? (
+                        <img
+                          src={logo}
+                          alt={`${team.game_title} logo`}
+                          className="teams-game-logo"
+                          onError={(e) => {
+                            e.currentTarget.style.display = "none";
+                          }}
+                        />
+                      ) : (
+                        (team.game_title || "G").charAt(0).toUpperCase()
+                      );
+                    })()}
                   </div>
 
                   <span
@@ -1031,8 +1101,6 @@ function Teams({ setActivePage }) {
     </div>
   );
 }
-
-
 
 function PlaceholderPage({ page, setActivePage }) {
   const descriptions = {
