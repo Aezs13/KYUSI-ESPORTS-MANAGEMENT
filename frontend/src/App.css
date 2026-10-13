@@ -1,4 +1,3 @@
-
 :root {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", sans-serif;
@@ -1520,7 +1519,6 @@ button:disabled {
   border-radius: 12px;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   overflow: hidden;
-  cursor: 
 }
 
 .teams-data-card::before {
@@ -1992,4 +1990,168 @@ button:disabled {
   display: block;
   padding: 0;
   border-radius: inherit;
+}
+
+/* ============================================================
+   Teams page: games overview (added)
+   ============================================================ */
+
+/* Four summary cards: Total Games, Total Teams, Active Teams, Total Members */
+.teams-summary.teams-summary-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 1200px) {
+  .teams-summary.teams-summary-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 650px) {
+  .teams-summary.teams-summary-4 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* A game card is a real <button>, so it works with the keyboard. */
+.game-card {
+  display: block;
+  width: 100%;
+  appearance: none;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.game-card:focus-visible {
+  outline: 2px solid #ff4655;
+  outline-offset: 2px;
+}
+
+.game-card .teams-card-divider {
+  display: block;
+}
+
+.game-card-name {
+  display: block;
+  margin-bottom: 6px;
+  color: #fff;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.game-card-meta {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.game-card-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #ff969a;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.game-back-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+}
+
+/* Success version of the notice banner (the default one is red). */
+.inline-notice.success {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: #bbf7d0;
+}
+
+.inline-notice.success button {
+  border-color: rgba(34, 197, 94, 0.5);
+  color: #86efac;
+}
+
+.inline-notice.success button:hover {
+  background: rgba(34, 197, 94, 0.2);
+}
+
+
+/* ============================================================
+   Dashboard: database-driven additions
+   ============================================================ */
+
+/* Two extra badge colors so more games get their own color. */
+.game-badge.violet,
+.team-emblem.violet {
+  color: #c4a8ff;
+  background: #8b5cf61c;
+  border: 1px solid #8b5cf633;
+}
+
+.game-badge.teal,
+.team-emblem.teal {
+  color: #7ee0d2;
+  background: #14b8a61b;
+  border: 1px solid #14b8a632;
+}
+
+.team-tag.violet {
+  color: #c9b0ff;
+  background: #8b5cf61b;
+}
+
+.team-tag.teal {
+  color: #86e3d6;
+  background: #14b8a61b;
+}
+
+/* "Tournament" events (scrim and match already have colors). */
+.event-type.tournament {
+  color: #f0c36d;
+  background: #e5a93e1c;
+}
+
+/* Game logos inside the small dashboard badges. */
+.game-badge,
+.team-emblem {
+  overflow: hidden;
+}
+
+.game-mark-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 4px;
+  object-fit: contain;
+}
+
+/* Text shown when a dashboard panel has no data yet. */
+.dashboard-empty {
+  margin: 0;
+  padding: 18px 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Schedule badges only had valorant/ml colors; add the other two. */
+.game-badge.lol {
+  color: #dfbf75;
+  background: #9d77231b;
+  border: 1px solid #9d772332;
+}
+
+.game-badge.cod {
+  color: #8cdb9b;
+  background: #2999471b;
+  border: 1px solid #29994732;
+}
+
+/* Long team descriptions wrap instead of overflowing the card. */
+.team-card-info > span:last-child {
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }

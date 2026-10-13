@@ -24,6 +24,7 @@ import {
   Gamepad2,
   LogOut,
   Activity,
+  ArrowLeft,
 } from "lucide-react";
 
 import "./App.css";
@@ -46,87 +47,118 @@ const navigation = [
   { label: "Settings", icon: Settings, section: "MANAGEMENT" },
 ];
 
-const matches = [
-  {
-    game: "VALORANT",
-
-    opponent: "Team Nemesis",
-
-    date: "Today",
-
-    time: "7:00 PM",
-
-    type: "Scrim",
-
-    color: "valorant",
-  },
-
-  {
-    game: "MOBILE LEGENDS",
-
-    opponent: "Nova Esports",
-
-    date: "Tomorrow",
-
-    time: "8:30 PM",
-
-    type: "Match",
-
-    color: "ml",
-  },
-
-  {
-    game: "VALORANT",
-
-    opponent: "Phantom Core",
-
-    date: "Oct 15",
-
-    time: "6:00 PM",
-
-    type: "Scrim",
-
-    color: "valorant",
-  },
-];
-
-const activities = [
-  {
-    icon: CircleCheck,
-
-    color: "green",
-
-    title: "Roster updated",
-
-    detail: "VALORANT · 2 minutes ago",
-  },
-
-  {
-    icon: ClipboardList,
-
-    color: "red",
-
-    title: "New scrim request",
-
-    detail: "Mobile Legends · 18 minutes ago",
-  },
-
-  {
-    icon: Trophy,
-
-    color: "yellow",
-
-    title: "Match result recorded",
-
-    detail: "VALORANT · 1 hour ago",
-  },
-];
-
 const API_BASE_URL = "http://localhost:8000";
 
 function formatRole(role) {
   if (!role) return "Member";
   return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
+// ---------------------------------------------------------------
+// Dashboard helpers
+// ---------------------------------------------------------------
+
+// "2 minutes ago", "3 hours ago", ...
+function formatTimeAgo(seconds) {
+  const s = Math.max(0, Number(seconds) || 0);
+
+  if (s < 60) return "just now";
+
+  const minutes = Math.floor(s / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+// startsAt looks like "2026-10-15 18:00:00". It is read as plain text,
+// so the browser's time zone can never shift it.
+function formatEventDate(startsAt, daysAway) {
+  if (daysAway === 0) return "Today";
+  if (daysAway === 1) return "Tomorrow";
+
+  const [year, month, day] = String(startsAt)
+    .slice(0, 10)
+    .split("-")
+    .map(Number);
+
+  return new Date(year, month - 1, day).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function formatEventTime(startsAt) {
+  const time = String(startsAt).split(/[ T]/)[1] || "00:00";
+  const [hours, minutes] = time.split(":").map(Number);
+  const hour12 = hours % 12 === 0 ? 12 : hours % 12;
+
+  return `${hour12}:${String(minutes).padStart(2, "0")} ${hours >= 12 ? "PM" : "AM"}`;
+}
+
+function capitalize(text) {
+  const value = String(text || "");
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+// "Mobile Legends" -> "ML", "Valorant" -> "V"
+function gameInitials(name) {
+  const words = String(name || "")
+    .replace(/\(.*?\)/g, "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (words.length === 0) return "G";
+
+  return words
+    .slice(0, 2)
+    .map((word) => word.charAt(0))
+    .join("")
+    .toUpperCase();
+}
+
+// Colors for the dashboard badges. Valorant and Mobile Legends keep their
+// colors; every other game gets one from the list, based on its id.
+const GAME_COLORS = ["lol", "cod", "violet", "teal"];
+
+function gameColor(gameId, gameName) {
+  const name = String(gameName || "").toLowerCase();
+
+  if (name.includes("valorant")) return "valorant";
+  if (name.includes("mobile legends") || name.includes("mlbb")) return "ml";
+
+  return GAME_COLORS[Number(gameId) % GAME_COLORS.length];
+}
+
+const ACTIVITY_STYLES = {
+  team: { icon: Shield, color: "green" },
+  roster: { icon: CircleCheck, color: "green" },
+  event: { icon: CalendarDays, color: "yellow" },
+  request: { icon: ClipboardList, color: "red" },
+  review_approved: { icon: CircleCheck, color: "green" },
+  review_rejected: { icon: CircleAlert, color: "red" },
+};
+
+// Game logo from the database, or fallback text if there is none.
+function GameMark({ logo, text, alt }) {
+  const [failed, setFailed] = useState(false);
+
+  if (logo && !failed) {
+    return (
+      <img
+        src={logo}
+        alt={alt}
+        className="game-mark-img"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+
+  return <>{text}</>;
 }
 
 function LoginScreen({ onLogin }) {
@@ -465,16 +497,76 @@ function SectionHeading({ eyebrow, title, description, action, onAction }) {
   );
 }
 
-function Dashboard({ setActivePage }) {
+function Dashboard({ setActivePage, user }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    apiRequest("/api/dashboard")
+      .then((result) => {
+        if (cancelled) return;
+        setData(result);
+        setError("");
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey]);
+
+  function retry() {
+    setLoading(true);
+    setError("");
+    setReloadKey((key) => key + 1);
+  }
+
+  const stats = data?.stats;
+  const schedule = data?.schedule || [];
+  const activity = data?.activity || [];
+  const teams = data?.teams || [];
+  const ownTeamsOnly = data?.scope === "team";
+  const pending = stats?.pending_requests ?? 0;
+  const canReview = stats?.can_review_requests ?? false;
+
+  // "–" is shown until the numbers arrive.
+  const show = (value) => (value === undefined || value === null ? "–" : value);
+
+  const firstName = (user?.full_name || user?.username || "")
+    .trim()
+    .split(/\s+/)[0];
+
   return (
     <>
       <SectionHeading
         eyebrow="ORGANIZATION OVERVIEW"
         title="Dashboard"
-        description="Here's what's happening across your organization."
+        description={
+          ownTeamsOnly
+            ? "Here's what's happening on your teams."
+            : "Here's what's happening across your organization."
+        }
         action="Schedule event"
         onAction={() => setActivePage("Scrims")}
       />
+
+      {error && (
+        <div className="inline-notice">
+          {error}
+          <button type="button" onClick={retry}>
+            Retry
+          </button>
+        </div>
+      )}
 
       <div className="welcome-banner">
         <div className="welcome-content">
@@ -482,7 +574,7 @@ function Dashboard({ setActivePage }) {
             <span className="red-dot" /> ORGANIZATION STATUS: ACTIVE
           </span>
 
-          <h2>Welcome back, President.</h2>
+          <h2>Welcome back{firstName ? `, ${firstName}` : ""}.</h2>
 
           <p>Keep your teams organized. Keep your competition sharp.</p>
 
@@ -505,23 +597,27 @@ function Dashboard({ setActivePage }) {
         <StatCard
           icon={Shield}
           label="Active Teams"
-          value="4"
-          note="Across 3 game titles"
+          value={show(stats?.active_teams)}
+          note={
+            stats
+              ? `Across ${stats.game_titles} game title${stats.game_titles === 1 ? "" : "s"}`
+              : "Loading..."
+          }
           color="red"
         />
 
         <StatCard
           icon={Users}
           label="Total Players"
-          value="32"
-          note="Across all rosters"
+          value={show(stats?.total_players)}
+          note={ownTeamsOnly ? "On your teams" : "Across active rosters"}
           color="blue"
         />
 
         <StatCard
           icon={CalendarDays}
           label="Scheduled Events"
-          value="08"
+          value={show(stats?.scheduled_events)}
           note="Next 7 days"
           color="purple"
         />
@@ -529,8 +625,8 @@ function Dashboard({ setActivePage }) {
         <StatCard
           icon={ClipboardList}
           label="Pending Requests"
-          value="04"
-          note="Awaiting your review"
+          value={show(stats?.pending_requests)}
+          note={canReview ? "Awaiting your review" : "Submitted by you"}
           color="yellow"
         />
       </div>
@@ -553,33 +649,43 @@ function Dashboard({ setActivePage }) {
           </div>
 
           <div className="schedule-list">
-            {matches.map((match) => (
-              <div
-                className="schedule-item"
-                key={`${match.opponent}-${match.time}`}
-              >
-                <div className={`game-badge ${match.color}`}>
-                  {match.color === "valorant" ? "V" : "ML"}
+            {loading && <p className="dashboard-empty">Loading schedule...</p>}
+
+            {!loading && schedule.length === 0 && (
+              <p className="dashboard-empty">No upcoming events scheduled.</p>
+            )}
+
+            {schedule.map((event) => (
+              <div className="schedule-item" key={event.id}>
+                <div
+                  className={`game-badge ${gameColor(event.game_id, event.game_name)}`}
+                >
+                  <GameMark
+                    logo={event.logo_path}
+                    text={gameInitials(event.game_name)}
+                    alt={`${event.game_name} logo`}
+                  />
                 </div>
 
                 <div className="match-details">
-                  <strong>{match.opponent}</strong>
+                  <strong>{event.opponent || event.title}</strong>
 
-                  <span>{match.game}</span>
+                  <span>{String(event.game_name).toUpperCase()}</span>
                 </div>
 
                 <div className="match-time">
                   <span>
-                    <CalendarDays size={13} /> {match.date}
+                    <CalendarDays size={13} />{" "}
+                    {formatEventDate(event.starts_at, event.days_away)}
                   </span>
 
                   <span>
-                    <Clock size={13} /> {match.time}
+                    <Clock size={13} /> {formatEventTime(event.starts_at)}
                   </span>
                 </div>
 
-                <span className={`event-type ${match.type.toLowerCase()}`}>
-                  {match.type}
+                <span className={`event-type ${event.event_type}`}>
+                  {capitalize(event.event_type)}
                 </span>
               </div>
             ))}
@@ -605,19 +711,28 @@ function Dashboard({ setActivePage }) {
           </div>
 
           <div className="activity-list">
-            {activities.map((activity) => {
-              const Icon = activity.icon;
+            {loading && <p className="dashboard-empty">Loading activity...</p>}
+
+            {!loading && activity.length === 0 && (
+              <p className="dashboard-empty">No activity yet.</p>
+            )}
+
+            {activity.map((item, index) => {
+              const style = ACTIVITY_STYLES[item.kind] || ACTIVITY_STYLES.team;
+              const Icon = style.icon;
 
               return (
-                <div className="activity-item" key={activity.title}>
-                  <div className={`activity-icon ${activity.color}`}>
+                <div className="activity-item" key={`${item.kind}-${index}`}>
+                  <div className={`activity-icon ${style.color}`}>
                     <Icon size={17} />
                   </div>
 
                   <div>
-                    <strong>{activity.title}</strong>
+                    <strong>{item.title}</strong>
 
-                    <span>{activity.detail}</span>
+                    <span>
+                      {item.detail} · {formatTimeAgo(item.seconds_ago)}
+                    </span>
                   </div>
                 </div>
               );
@@ -628,13 +743,28 @@ function Dashboard({ setActivePage }) {
             <CircleAlert size={18} />
 
             <div>
-              <strong>4 requests need attention</strong>
+              <strong>
+                {pending === 0
+                  ? "No pending requests"
+                  : canReview
+                    ? `${pending} request${pending === 1 ? "" : "s"} need${pending === 1 ? "s" : ""} attention`
+                    : `${pending} of your request${pending === 1 ? " is" : "s are"} pending`}
+              </strong>
 
-              <p>Review scrim and roster requests.</p>
+              <p>
+                {pending === 0
+                  ? "You're all caught up."
+                  : canReview
+                    ? "Review scrim and roster requests."
+                    : "A manager will review them soon."}
+              </p>
 
-              <button onClick={() => setActivePage("Requests")}>
-                Review requests <ArrowUpRight size={14} />
-              </button>
+              {pending > 0 && (
+                <button onClick={() => setActivePage("Requests")}>
+                  {canReview ? "Review requests" : "View requests"}{" "}
+                  <ArrowUpRight size={14} />
+                </button>
+              )}
             </div>
           </div>
         </section>
@@ -656,43 +786,38 @@ function Dashboard({ setActivePage }) {
           </button>
         </div>
 
-        <div className="teams-grid">
-          <TeamCard
-            name="VALORANT"
-            subtitle="FPS Division"
-            tag="COMPETITIVE"
-            code="V"
-            color="valorant"
-            players="6 players"
-          />
+        {loading && <p className="dashboard-empty">Loading teams...</p>}
 
-          <TeamCard
-            name="MOBILE LEGENDS"
-            subtitle="MOBA Division"
-            tag="COMPETITIVE"
-            code="ML"
-            color="ml"
-            players="8 players"
-          />
+        {!loading && teams.length === 0 && (
+          <p className="dashboard-empty">
+            No teams yet. Add a game, then create your first team from the Teams
+            page.
+          </p>
+        )}
 
-          <TeamCard
-            name="LEAGUE OF LEGENDS"
-            subtitle="MOBA Division"
-            tag="DEVELOPMENT"
-            code="LOL"
-            color="lol"
-            players="6 players"
-          />
-
-          <TeamCard
-            name="CALL OF DUTY"
-            subtitle="FPS Division"
-            tag="COMPETITIVE"
-            code="COD"
-            color="cod"
-            players="5 players"
-          />
-        </div>
+        {teams.length > 0 && (
+          <div className="teams-grid">
+            {teams.map((team) => (
+              <TeamCard
+                key={team.id}
+                name={team.name}
+                subtitle={
+                  team.description
+                    ? team.description.length > 60
+                      ? `${team.description.slice(0, 57)}...`
+                      : team.description
+                    : `${team.game_name} division`
+                }
+                tag={String(team.game_name).toUpperCase()}
+                code={gameInitials(team.game_name)}
+                color={gameColor(team.game_id, team.game_name)}
+                players={`${team.member_count} player${team.member_count === 1 ? "" : "s"}`}
+                status={team.status}
+                logo={team.logo_path}
+              />
+            ))}
+          </div>
+        )}
       </section>
 
       <footer className="dashboard-footer">
@@ -720,10 +845,21 @@ function StatCard({ icon: Icon, label, value, note, color }) {
   );
 }
 
-function TeamCard({ name, subtitle, tag, code, color, players }) {
+function TeamCard({
+  name,
+  subtitle,
+  tag,
+  code,
+  color,
+  players,
+  status = "active",
+  logo,
+}) {
   return (
     <div className="team-card">
-      <div className={`team-emblem ${color}`}>{code}</div>
+      <div className={`team-emblem ${color}`}>
+        <GameMark logo={logo} text={code} alt={`${tag} logo`} />
+      </div>
 
       <div className="team-card-info">
         <span className={`team-tag ${color}`}>{tag}</span>
@@ -739,73 +875,413 @@ function TeamCard({ name, subtitle, tag, code, color, players }) {
         </span>
 
         <span className="team-status">
-          <span className="live-dot" /> Active
+          {status === "active" && <span className="live-dot" />}{" "}
+          {capitalize(status)}
         </span>
       </div>
     </div>
   );
 }
 
-function Teams({ setActivePage }) {
-  const [teams, setTeams] = useState([]);
+// ---------------------------------------------------------------
+// Teams page: Games overview  ->  one game's teams
+// ---------------------------------------------------------------
+
+// Small helper so every request handles errors the same way.
+async function apiRequest(path, options = {}) {
+  let response;
+
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      credentials: "include",
+      ...options,
+    });
+  } catch {
+    throw new Error(
+      "Unable to reach the server. Make sure the PHP backend and MySQL are running.",
+    );
+  }
+
+  let data = null;
+
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
+  }
+
+  if (!response.ok || !data || !data.success) {
+    throw new Error(data?.message || "Something went wrong. Please try again.");
+  }
+
+  return data;
+}
+
+function jsonRequest(method, body) {
+  return {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  };
+}
+
+// Shows the game's logo from the database, or its first letter.
+function GameAvatar({ name, logoPath }) {
+  const [failed, setFailed] = useState(false);
+
+  return (
+    <span className="teams-game-avatar">
+      {logoPath && !failed ? (
+        <img
+          src={logoPath}
+          alt={`${name} logo`}
+          className="teams-game-logo"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        (name || "G").charAt(0).toUpperCase()
+      )}
+    </span>
+  );
+}
+
+function TeamsSummaryCard({ icon: Icon, label, value, active }) {
+  return (
+    <div className="teams-summary-card">
+      <div className={`teams-summary-icon${active ? " active" : ""}`}>
+        <Icon size={24} />
+      </div>
+
+      <div>
+        <p>{label}</p>
+        <h3>{value}</h3>
+      </div>
+    </div>
+  );
+}
+
+function TeamsNotices({ notice, error, onDismissNotice, onDismissError }) {
+  return (
+    <>
+      {notice && (
+        <div className="inline-notice success">
+          {notice}
+          <button type="button" onClick={onDismissNotice}>
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <div className="inline-notice">
+          {error}
+          <button type="button" onClick={onDismissError}>
+            Dismiss
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
+// Level 1: all games + the summary cards.
+function GamesOverview({ onSelectGame }) {
+  const [games, setGames] = useState([]);
+  const [summary, setSummary] = useState(null);
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [gameName, setGameName] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
 
-  const [form, setForm] = useState({
-    name: "",
-    game_title: "",
-    description: "",
-  });
+  useEffect(() => {
+    let cancelled = false;
 
-  const API_BASE_URL = "http://localhost:8000";
+    apiRequest("/api/games")
+      .then((data) => {
+        if (cancelled) return;
+        setGames(data.games || []);
+        setSummary(data.summary || null);
+        setError("");
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
 
-  async function loadTeams() {
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey]);
+
+  function reload() {
     setLoading(true);
+    setReloadKey((key) => key + 1);
+  }
+
+  async function handleAddGame(event) {
+    event.preventDefault();
+    setSaving(true);
+    setNotice("");
     setError("");
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/teams`, {
-        credentials: "include",
-      });
+      const data = await apiRequest(
+        "/api/games",
+        jsonRequest("POST", { name: gameName }),
+      );
 
-      const data = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || "Unable to load teams.");
-      }
-
-      setTeams(data.teams || []);
+      setNotice(`${data.game.name} was added.`);
+      setGameName("");
+      setShowForm(false);
+      reload();
     } catch (err) {
-      setError(err.message || "Unable to connect to the server.");
+      setError(err.message);
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   }
 
-  useEffect(() => {
-    loadTeams();
-  }, []);
-
-  const filteredTeams = teams.filter((team) => {
-    const searchText = search.toLowerCase();
-
-    return (
-      (team.name || "").toLowerCase().includes(searchText) ||
-      (team.game_title || "").toLowerCase().includes(searchText)
-    );
-  });
-
-  // Calculate summary statistics
-  const totalTeams = teams.length;
-  const activeTeams = teams.filter((team) => team.status === "active").length;
-  const totalMembers = teams.reduce(
-    (sum, team) => sum + (team.member_count || 0),
-    0,
+  const searchText = search.trim().toLowerCase();
+  const filteredGames = games.filter((game) =>
+    (game.name || "").toLowerCase().includes(searchText),
   );
+  const loadFailed = !loading && summary === null;
+
+  return (
+    <div className="teams-workspace">
+      <SectionHeading
+        eyebrow="ORGANIZATION MANAGEMENT"
+        title="Teams"
+        description="Choose a game to manage its teams."
+        action="Add Game"
+        onAction={() => {
+          setShowForm((current) => !current);
+          setNotice("");
+          setError("");
+        }}
+      />
+
+      <TeamsNotices
+        notice={notice}
+        error={error}
+        onDismissNotice={() => setNotice("")}
+        onDismissError={() => setError("")}
+      />
+
+      {summary && (
+        <div className="teams-summary teams-summary-4">
+          <TeamsSummaryCard
+            icon={Gamepad2}
+            label="Total Games"
+            value={summary.total_games}
+          />
+          <TeamsSummaryCard
+            icon={Shield}
+            label="Total Teams"
+            value={summary.total_teams}
+          />
+          <TeamsSummaryCard
+            icon={CircleCheck}
+            label="Active Teams"
+            value={summary.active_teams}
+            active
+          />
+          <TeamsSummaryCard
+            icon={Users}
+            label="Total Members"
+            value={summary.total_members}
+          />
+        </div>
+      )}
+
+      {showForm && (
+        <section className="panel team-form-panel">
+          <div className="teams-toolbar">
+            <div>
+              <h2>Add a game</h2>
+              <p>Teams are created inside a game, so add the game first.</p>
+            </div>
+          </div>
+
+          <form onSubmit={handleAddGame}>
+            <div className="teams-form-grid">
+              <div className="teams-form-field full-width">
+                <label htmlFor="game-name">Game name</label>
+                <input
+                  id="game-name"
+                  value={gameName}
+                  onChange={(event) => setGameName(event.target.value)}
+                  placeholder="e.g. League of Legends"
+                  maxLength={100}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="teams-form-actions">
+              <button
+                type="submit"
+                className="primary-button"
+                disabled={saving}
+              >
+                {saving ? "Adding..." : "Add game"}
+              </button>
+
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setShowForm(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
+
+      <section className="panel teams-list-panel">
+        <div className="teams-toolbar">
+          <div>
+            <h2>Games</h2>
+            <p>{games.length} game(s). Select one to manage its teams.</p>
+          </div>
+
+          <div className="teams-search-box">
+            <Search size={17} />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search games..."
+              aria-label="Search games"
+            />
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="teams-loading-state">
+            <div className="loading-spinner"></div>
+            <p>Loading games...</p>
+          </div>
+        ) : loadFailed ? (
+          <div className="teams-empty-state">
+            <h3>Could not load games</h3>
+            <p>Check the message above, then try again.</p>
+            <button type="button" className="primary-button" onClick={reload}>
+              Try again
+            </button>
+          </div>
+        ) : filteredGames.length === 0 ? (
+          <div className="teams-empty-state">
+            <div className="empty-state-icon">
+              <Gamepad2 size={48} />
+            </div>
+            <h3>{search ? "No matching games" : "No games yet"}</h3>
+            <p>
+              {search
+                ? "Try a different game name."
+                : "Add your first game to start creating teams."}
+            </p>
+
+            {!search && (
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => setShowForm(true)}
+              >
+                <Plus size={20} /> Add your first game
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="teams-card-grid">
+            {filteredGames.map((game) => (
+              <button
+                type="button"
+                className="teams-data-card game-card"
+                key={game.id}
+                onClick={() => onSelectGame(game)}
+              >
+                <span className="teams-data-card-header">
+                  <GameAvatar name={game.name} logoPath={game.logo_path} />
+                </span>
+
+                <span className="game-card-name">{game.name}</span>
+
+                <span className="game-card-meta">
+                  {game.team_count} team(s), {game.active_team_count} active
+                </span>
+
+                <span className="teams-card-divider" />
+
+                <span className="teams-data-card-footer">
+                  <span className="teams-member-count">
+                    <Users size={17} />
+                    <span>
+                      <strong>{game.member_count}</strong> Members
+                    </span>
+                  </span>
+
+                  <span className="game-card-cta">
+                    Manage teams <ArrowUpRight size={14} />
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+// Level 2: the teams of one selected game.
+function GameTeams({ game, onBack }) {
+  const [teams, setTeams] = useState([]);
+  const [search, setSearch] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({
+    name: "",
+    team_tag: "",
+    game_id: "",
+    manager_id: "",
+    logo: null,
+    status: "active",
+    description: "",
+  });
+  const [manager, setManager] = useState("");
+  const [logoPreview, setLogoPreview] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    apiRequest(`/api/teams?game_id=${game.id}`)
+      .then((data) => {
+        if (cancelled) return;
+        setTeams(data.teams || []);
+        setError("");
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [game.id, reloadKey]);
 
   async function handleCreateTeam(event) {
     event.preventDefault();
@@ -814,43 +1290,55 @@ function Teams({ setActivePage }) {
     setError("");
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/teams`, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(form),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || "Unable to create team.");
-      }
+      await apiRequest(
+        "/api/teams",
+        jsonRequest("POST", {
+          name: form.name.trim(),
+          description: form.description.trim(),
+          game_id: game.id,
+          status: form.status,
+        }),
+      );
 
       setNotice("Team created successfully!");
       setForm({
         name: "",
-        game_title: "",
+        team_tag: "",
+        game_id: String(game.id),
+        manager_id: "",
+        logo: null,
+        status: "active",
         description: "",
       });
       setShowForm(false);
-
-      await loadTeams();
+      setLoading(true);
+      setReloadKey((key) => key + 1);
     } catch (err) {
-      setError(err.message || "Unable to create team.");
+      setError(err.message);
     } finally {
       setSaving(false);
     }
   }
 
+  const searchText = search.trim().toLowerCase();
+  const filteredTeams = teams.filter((team) =>
+    (team.name || "").toLowerCase().includes(searchText),
+  );
+
   return (
     <div className="teams-workspace">
+      <button
+        type="button"
+        className="secondary-button game-back-button"
+        onClick={onBack}
+      >
+        <ArrowLeft size={16} /> All games
+      </button>
+
       <SectionHeading
-        eyebrow="ORGANIZATION MANAGEMENT"
-        title="Teams"
-        description="Manage your organization's competitive divisions."
+        eyebrow={`TEAMS / ${game.name.toUpperCase()}`}
+        title={game.name}
+        description={`Manage the ${game.name} teams in your organization.`}
         action="Add team"
         onAction={() => {
           setShowForm((current) => !current);
@@ -859,67 +1347,24 @@ function Teams({ setActivePage }) {
         }}
       />
 
-      {notice && (
-        <div className="inline-notice">
-          {notice}
-          <button onClick={() => setNotice("")}>Dismiss</button>
-        </div>
-      )}
-
-      {error && (
-        <div className="inline-notice">
-          {error}
-          <button onClick={() => setError("")}>Dismiss</button>
-        </div>
-      )}
-
-      {/* Summary Cards */}
-      {!loading && !error && teams.length > 0 && (
-        <div className="teams-summary">
-          <div className="teams-summary-card">
-            <div className="teams-summary-icon">
-              <Shield size={24} />
-            </div>
-            <div>
-              <p>Total Teams</p>
-              <h3>{totalTeams}</h3>
-            </div>
-          </div>
-
-          <div className="teams-summary-card">
-            <div className="teams-summary-icon active">
-              <CircleCheck size={24} />
-            </div>
-            <div>
-              <p>Active Teams</p>
-              <h3>{activeTeams}</h3>
-            </div>
-          </div>
-
-          <div className="teams-summary-card">
-            <div className="teams-summary-icon">
-              <Users size={24} />
-            </div>
-            <div>
-              <p>Total Members</p>
-              <h3>{totalMembers}</h3>
-            </div>
-          </div>
-        </div>
-      )}
+      <TeamsNotices
+        notice={notice}
+        error={error}
+        onDismissNotice={() => setNotice("")}
+        onDismissError={() => setError("")}
+      />
 
       {showForm && (
         <section className="panel team-form-panel">
           <div className="teams-toolbar">
             <div>
-              <h2>Create a team</h2>
-              <p>Add a new competitive division to your organization.</p>
+              <h2>Create a {game.name} team</h2>
+              <p>Add a new competitive division for this game.</p>
             </div>
           </div>
-
           <form onSubmit={handleCreateTeam}>
             <div className="teams-form-grid">
-              <div className="teams-form-field">
+              <div className="teams-form-field full-width">
                 <label htmlFor="team-name">Team name</label>
                 <input
                   id="team-name"
@@ -927,24 +1372,97 @@ function Teams({ setActivePage }) {
                   onChange={(event) =>
                     setForm({ ...form, name: event.target.value })
                   }
-                  placeholder="e.g. Kyusi Valorant"
+                  placeholder="e.g. KE Tiddles"
                   maxLength={100}
                   required
                 />
               </div>
 
-              <div className="teams-form-field">
-                <label htmlFor="team-game">Game title</label>
+              <div className="teams-form-field full-width">
+                <label htmlFor="team-tag">Team tag</label>
                 <input
-                  id="team-game"
-                  value={form.game_title}
+                  id="team-tag"
+                  value={form.team_tag}
                   onChange={(event) =>
-                    setForm({ ...form, game_title: event.target.value })
+                    setForm({ ...form, team_tag: event.target.value })
                   }
-                  placeholder="e.g. Valorant"
-                  maxLength={100}
-                  required
+                  placeholder="e.g. KYSI"
+                  maxLength={20}
                 />
+              </div>
+
+              <div className="teams-form-field full-width">
+                <label htmlFor="team-game">Game</label>
+                <input id="team-game" type="text" value={game.name} readOnly />
+                <p className="field-hint">
+                  This team will be created under the selected game.
+                </p>
+              </div>
+
+              <div className="teams-form-field full-width">
+                <label htmlFor="team-logo">Team logo</label>
+                <input
+                  id="team-logo"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+
+                    if (!file) return;
+
+                    if (!file.type.startsWith("image/")) {
+                      alert("Please select a valid image.");
+                      event.target.value = "";
+                      return;
+                    }
+
+                    if (file.size > 5 * 1024 * 1024) {
+                      alert("The logo must be 5 MB or smaller.");
+                      event.target.value = "";
+                      return;
+                    }
+
+                    setForm({ ...form, logo: file });
+                    setLogoPreview(URL.createObjectURL(file));
+                  }}
+                />
+
+                {logoPreview && (
+                  <div className="teams-logo-preview">
+                    <img
+                      src={logoPreview}
+                      alt="Team logo preview"
+                      className="teams-logo-image"
+                    />
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => {
+                        setForm({ ...form, logo: null });
+                        setLogoPreview("");
+                        const input = document.getElementById("team-logo");
+                        if (input) input.value = "";
+                      }}
+                    >
+                      Remove logo
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="teams-form-field full-width">
+                <label htmlFor="team-status">Team status</label>
+                <select
+                  id="team-status"
+                  value={form.status}
+                  onChange={(event) =>
+                    setForm({ ...form, status: event.target.value })
+                  }
+                  required
+                >
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </select>
               </div>
 
               <div className="teams-form-field full-width">
@@ -986,8 +1504,8 @@ function Teams({ setActivePage }) {
       <section className="panel teams-list-panel">
         <div className="teams-toolbar">
           <div>
-            <h2>Your teams</h2>
-            <p>{teams.length} team(s) in your organization</p>
+            <h2>{game.name} teams</h2>
+            <p>{teams.length} team(s) in this game</p>
           </div>
 
           <div className="teams-search-box">
@@ -995,7 +1513,7 @@ function Teams({ setActivePage }) {
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search teams by name or game..."
+              placeholder="Search teams by name..."
               aria-label="Search teams"
             />
           </div>
@@ -1014,12 +1532,13 @@ function Teams({ setActivePage }) {
             <h3>{search ? "No matching teams" : "No teams yet"}</h3>
             <p>
               {search
-                ? "Try a different team name or game title."
-                : "Create your first team to get started."}
+                ? "Try a different team name."
+                : `Create the first ${game.name} team to get started.`}
             </p>
 
             {!search && (
               <button
+                type="button"
                 className="primary-button"
                 onClick={() => setShowForm(true)}
               >
@@ -1032,48 +1551,14 @@ function Teams({ setActivePage }) {
             {filteredTeams.map((team) => (
               <article className="teams-data-card" key={team.id}>
                 <div className="teams-data-card-header">
-                  <div className="teams-game-avatar">
-                    {(() => {
-                      const game = (team.game_title || "").toLowerCase();
+                  <GameAvatar name={game.name} logoPath={game.logo_path} />
 
-                      let logo = null;
-
-                      if (game.includes("valorant")) {
-                        logo = "/game-logos/valorant.png";
-                      } else if (
-                        game.includes("mobile legends") ||
-                        game.includes("mlbb")
-                      ) {
-                        logo = "/game-logos/mobile-legends.png";
-                      }
-
-                      return logo ? (
-                        <img
-                          src={logo}
-                          alt={`${team.game_title} logo`}
-                          className="teams-game-logo"
-                          onError={(e) => {
-                            e.currentTarget.style.display = "none";
-                          }}
-                        />
-                      ) : (
-                        (team.game_title || "G").charAt(0).toUpperCase()
-                      );
-                    })()}
-                  </div>
-
-                  <span
-                    className={`teams-status-badge ${
-                      team.status !== "active" ? team.status : ""
-                    }`}
-                  >
+                  <span className={`teams-status-badge ${team.status || ""}`}>
                     {team.status || "Unknown"}
                   </span>
                 </div>
 
-                <span className="teams-game-name">
-                  {team.game_title || "Game not specified"}
-                </span>
+                <span className="teams-game-name">{game.name}</span>
 
                 <h3>{team.name}</h3>
 
@@ -1102,10 +1587,25 @@ function Teams({ setActivePage }) {
   );
 }
 
+// Teams page: shows the games list, or one game's teams.
+function Teams() {
+  const [selectedGame, setSelectedGame] = useState(null);
+
+  if (selectedGame) {
+    return (
+      <GameTeams
+        key={selectedGame.id}
+        game={selectedGame}
+        onBack={() => setSelectedGame(null)}
+      />
+    );
+  }
+
+  return <GamesOverview onSelectGame={setSelectedGame} />;
+}
+
 function PlaceholderPage({ page, setActivePage }) {
   const descriptions = {
-    Teams: "Manage your organization's competitive divisions.",
-
     Rosters: "Review players and manage team membership.",
 
     Scrims: "Coordinate practice sessions with other teams.",
@@ -1351,9 +1851,9 @@ export default function App() {
 
         <div className="page-content">
           {activePage === "Dashboard" ? (
-            <Dashboard setActivePage={setActivePage} />
+            <Dashboard setActivePage={setActivePage} user={user} />
           ) : activePage === "Teams" ? (
-            <Teams setActivePage={setActivePage} />
+            <Teams />
           ) : (
             <PlaceholderPage page={activePage} setActivePage={setActivePage} />
           )}
